@@ -810,10 +810,6 @@ set_next_tx_row(struct stailq *rows, struct applier_tx_row *tx_row, int64_t tsn)
 		 * of the first row in the transaction.
 		 */
 		tsn = row->tsn;
-		if (row->lsn != tsn)
-			tnt_raise(ClientError, ER_PROTOCOL,
-				  "Transaction id must be equal to LSN of the "
-				  "first row in the transaction.");
 	} else if (tsn != row->tsn) {
 		tnt_raise(ClientError, ER_UNSUPPORTED, "replication",
 			  "interleaving transactions");
@@ -1261,6 +1257,12 @@ applier_apply_tx(struct applier *applier, struct stailq *rows)
 	struct latch *latch = (replica ? &replica->order_latch :
 			       &replicaset.applier.order_latch);
 	latch_lock(latch);
+
+	if (first_row->lsn != first_row->tsn) {
+		tnt_raise(ClientError, ER_PROTOCOL, "Transaction id must be "
+			  "equal to LSN of the first row in the transaction.");
+	}
+
 	if (vclock_get(&replicaset.applier.vclock,
 		       last_row->replica_id) >= last_row->lsn) {
 		goto finish;
