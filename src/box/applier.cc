@@ -1258,16 +1258,41 @@ applier_apply_tx(struct applier *applier, struct stailq *rows)
 			       &replicaset.applier.order_latch);
 	latch_lock(latch);
 
-	if (first_row->lsn != first_row->tsn) {
+	/*
+	 * Check that the first received row is really the transaction start.
+	 *
+	 * Allow transactions with missing beginning in the following rare case:
+	 * imagine updating a cluster from a version which doesn't yet support
+	 * transaction boundaries. Say, you have nodes A, B, C. A is already
+	 * updated, while B and C are not.
+	 *
+	 * At some point in time A writes a transaction consisting of rows
+	 * x and y. The transaction is relayed to B, and B starts relaying it to
+	 * C. Neither B nor C support transaction boundaries, so they apply x
+	 * like it was a single-statement transaction.
+	 *
+	 * Once C applies x, it is restarted and upgraded to the new Tarantool
+	 * version. Now C tries connecting to A, and A finds the first entry
+	 * missing on C. It's y. Once C receives y, it raises a ER_PROTOCOL
+	 * error, because it expects a full transaction [x, y], but receives
+	 * only the second row.
+	 *
+	 * In order to handle this, allow transactions with missing
+	 * first row, if the beginning of such transaction is already
+	 * applied.
+	 */
+	uint32_t id = first_row->replica_id;
+	int64_t lsn = vclock_get(&replicaset.applier.vclock, id);
+
+	if (lsn >= last_row->lsn)
+		goto finish;
+
+	if (first_row->lsn != first_row->tsn && first_row->lsn > lsn + 1) {
 		tnt_raise(ClientError, ER_PROTOCOL, "Transaction id must be "
 			  "equal to LSN of the first row in the transaction.");
 	}
 
-	if (vclock_get(&replicaset.applier.vclock,
-		       last_row->replica_id) >= last_row->lsn) {
-		goto finish;
-	} else if (vclock_get(&replicaset.applier.vclock,
-			      first_row->replica_id) >= first_row->lsn) {
+	if (lsn >= first_row->lsn) {
 		/*
 		 * We've received part of the tx from an old
 		 * instance not knowing of tx boundaries.
@@ -1278,8 +1303,7 @@ applier_apply_tx(struct applier *applier, struct stailq *rows)
 			tmp = &stailq_first_entry(rows,
 						  struct applier_tx_row,
 						  next)->row;
-			if (tmp->lsn <= vclock_get(&replicaset.applier.vclock,
-						   tmp->replica_id)) {
+			if (tmp->lsn <= lsn) {
 				stailq_shift(rows);
 			} else {
 				break;
