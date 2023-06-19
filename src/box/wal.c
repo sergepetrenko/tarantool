@@ -64,6 +64,8 @@ const char *wal_mode_STRS[WAL_MODE_MAX] = {
 
 int wal_dir_lock = -1;
 
+static struct fiber *wal_fiber = NULL;
+
 RLIST_HEAD(wal_on_write);
 
 static int
@@ -549,8 +551,11 @@ wal_init(enum wal_mode wal_mode, const char *wal_dirname,
 			  on_checkpoint_threshold);
 
 	/* Start WAL thread. */
-	if (cord_costart(&writer->cord, "wal", wal_writer_f, NULL) != 0)
+	wal_fiber = fiber_new("wal", wal_writer_f);
+	if (wal_fiber == NULL)
 		return -1;
+	fiber_set_joinable(wal_fiber, true);
+	fiber_start(wal_fiber);
 
 	/* Create a pipe to WAL thread. */
 	cpipe_create(&writer->wal_pipe, "wal");
@@ -590,10 +595,7 @@ wal_free(void)
 
 	cbus_stop_loop(&writer->wal_pipe);
 
-	if (cord_join(&writer->cord)) {
-		/* We can't recover from this in any reasonable way. */
-		panic_syserror("WAL writer: thread join failed");
-	}
+	/* Should join the fiber here, but can't do it from the sched. */
 
 	trigger_destroy(&wal_on_write);
 
@@ -1186,9 +1188,6 @@ wal_writer_f(va_list ap)
 {
 	(void) ap;
 	struct wal_writer *writer = &wal_writer_singleton;
-
-	/** Initialize eio in this thread */
-	coio_enable();
 
 	struct cbus_endpoint endpoint;
 	cbus_endpoint_create(&endpoint, "wal", fiber_schedule_cb, fiber());
