@@ -137,6 +137,8 @@ struct applier_thread {
 	struct cpipe tx_pipe;
 	/** A pipe from tx to the applier thread. */
 	struct cpipe thread_pipe;
+	/** In case you want to run everything in one place. */
+	struct fiber *fiber;
 };
 
 /**

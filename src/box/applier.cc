@@ -1909,8 +1909,7 @@ ibuf_move_tail(struct ibuf *src, struct ibuf *dst, size_t size)
 static struct applier_data_msg *
 applier_thread_next_msg(struct applier *applier)
 {
-	struct applier_thread *thread = container_of(cord(), typeof(*thread),
-						     cord);
+	struct applier_thread *thread = applier->applier_thread;
 	int cur = applier->thread.msg_ptr;
 	for (int i = 0; i < 2; i++) {
 		struct applier_data_msg *msg =
@@ -2008,8 +2007,7 @@ static int
 applier_thread_reader_f(va_list ap)
 {
 	struct applier *applier = va_arg(ap, struct applier *);
-	struct applier_thread *thread = container_of(cord(), typeof(*thread),
-						     cord);
+	struct applier_thread *thread = applier->applier_thread;
 	struct lsregion *lsr = &applier->thread.lsr;
 	const struct applier_read_ctx ctx = {
 		.ibuf = &applier->thread.ibuf,
@@ -2062,7 +2060,7 @@ static int
 applier_thread_f(va_list ap)
 {
 	struct applier_thread *thread = va_arg(ap, typeof(thread));
-	int rc = cbus_endpoint_create(&thread->endpoint, cord()->name,
+	int rc = cbus_endpoint_create(&thread->endpoint, fiber()->name,
 				      fiber_schedule_cb, fiber());
 	assert(rc == 0);
 	(void)rc;
@@ -2083,8 +2081,11 @@ applier_thread_create(struct applier_thread *thread)
 
 	memset(thread, 0, sizeof(*thread));
 
-	if (cord_costart(&thread->cord, name, applier_thread_f, thread) != 0)
+	thread->fiber = fiber_new(name, applier_thread_f);
+	if (thread->fiber == NULL)
 		diag_raise();
+	fiber_set_joinable(thread->fiber, true);
+	fiber_start(thread->fiber, thread);
 
 	cpipe_create(&thread->thread_pipe, name);
 }
@@ -2118,7 +2119,7 @@ applier_free(void)
 {
 	for (int i = 0; i < replication_threads; i++) {
 		struct applier_thread *thread = applier_threads[i];
-		cord_cancel_and_join(&thread->cord);
+		/* XXX: should join the fiber, but can't do that from sched. */
 		free(thread);
 	}
 	free(applier_threads);
