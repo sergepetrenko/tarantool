@@ -430,7 +430,7 @@ relay_set_cord_name(int fd)
 	} else {
 		snprintf(name, sizeof(name), "relay/<unknown>");
 	}
-	cord_set_name(name);
+	fiber_set_name(fiber(), name);
 }
 
 void
@@ -514,7 +514,6 @@ relay_final_join_f(va_list ap)
 	struct relay *relay = va_arg(ap, struct relay *);
 	auto guard = make_scoped_guard([=] { relay_exit(relay); });
 
-	coio_enable();
 	relay_set_cord_name(relay->io->fd);
 
 	/* Send all WALs until stop_vclock */
@@ -545,11 +544,10 @@ relay_final_join(struct iostream *io, uint64_t sync,
 	relay->r = recovery_new(wal_dir(), false, start_vclock);
 	vclock_copy(&relay->stop_vclock, stop_vclock);
 
-	int rc = cord_costart(&relay->cord, "final_join",
-			      relay_final_join_f, relay);
-	if (rc == 0)
-		rc = cord_cojoin(&relay->cord);
-	if (rc != 0)
+	struct fiber *fiber = fiber_new("final_join", relay_final_join_f);
+	fiber_set_joinable(fiber, true);
+	fiber_start(fiber, relay);
+	if (fiber_join(fiber) != 0)
 		diag_raise();
 
 	ERROR_INJECT(ERRINJ_RELAY_FINAL_JOIN,
@@ -961,7 +959,6 @@ relay_subscribe_f(va_list ap)
 {
 	struct relay *relay = va_arg(ap, struct relay *);
 
-	coio_enable();
 	relay_set_cord_name(relay->io->fd);
 
 	cbus_endpoint_create(&relay->tx_endpoint,
@@ -1119,11 +1116,12 @@ relay_subscribe(struct replica *replica, struct iostream *io, uint64_t sync,
 
 	relay->id_filter = replica_id_filter;
 
-	int rc = cord_costart(&relay->cord, "subscribe",
-			      relay_subscribe_f, relay);
-	if (rc == 0)
-		rc = cord_cojoin(&relay->cord);
-	if (rc != 0)
+	struct fiber *fiber = fiber_new("relay", relay_subscribe_f);
+	if (fiber == NULL)
+		diag_raise();
+	fiber_start(fiber, relay);
+	fiber_set_joinable(fiber, true);
+	if(fiber_join(fiber) != 0)
 		diag_raise();
 }
 
