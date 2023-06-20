@@ -858,7 +858,8 @@ replica_join_cancel(struct cord *replica_join_cord)
 	 * running and wait for it to terminate so as to
 	 * eliminate the possibility of use-after-free.
 	 */
-	cord_cancel_and_join(replica_join_cord);
+	/* XXX: should do fiber_join, but can't from sched. */
+	(void)replica_join_cord;
 }
 
 static int
@@ -1276,11 +1277,12 @@ memtx_engine_join(struct engine *engine, void *arg, struct xstream *stream)
 	 * precious tx cpu time while a new replica is joining.
 	 */
 	struct cord cord;
-	if (cord_costart(&cord, "initial_join", memtx_join_f, ctx) != 0)
-		return -1;
+	struct fiber *fiber = fiber_new("initial_join", memtx_join_f);
+	fiber_set_joinable(fiber, true);
+	fiber_start(fiber, ctx);
 	struct memtx_engine *memtx = (struct memtx_engine *)engine;
 	memtx->replica_join_cord = &cord;
-	int res = cord_cojoin(&cord);
+	int res = fiber_join(fiber);
 	memtx->replica_join_cord = NULL;
 	xstream_reset(stream);
 	return res;
