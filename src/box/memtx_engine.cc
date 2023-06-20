@@ -1072,14 +1072,13 @@ memtx_engine_wait_checkpoint(struct engine *engine,
 	}
 	vclock_copy(&memtx->checkpoint->vclock, vclock);
 
-	if (cord_costart(&memtx->checkpoint->cord, "snapshot",
-			 checkpoint_f, memtx->checkpoint)) {
-		return -1;
-	}
+	struct fiber *fiber = fiber_new("snapshot", checkpoint_f);
+	fiber_set_joinable(fiber, true);
+	fiber_start(fiber, memtx->checkpoint);
 	memtx->checkpoint->waiting_for_snap_thread = true;
 
 	/* wait for memtx-part snapshot completion */
-	int result = cord_cojoin(&memtx->checkpoint->cord);
+	int result = fiber_join(fiber);
 	if (result != 0)
 		diag_log();
 
