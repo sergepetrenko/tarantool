@@ -127,7 +127,7 @@ vy_run_reader_f(va_list ap)
 	struct cbus_endpoint endpoint;
 
 	cpipe_create(&reader->tx_pipe, "tx_prio");
-	cbus_endpoint_create(&endpoint, cord_name(cord()),
+	cbus_endpoint_create(&endpoint, fiber_name(fiber()),
 			     fiber_schedule_cb, fiber());
 	cbus_loop(&endpoint);
 	cbus_endpoint_destroy(&endpoint, cbus_process);
@@ -152,9 +152,9 @@ vy_run_env_start_readers(struct vy_run_env *env)
 		char name[FIBER_NAME_MAX];
 
 		snprintf(name, sizeof(name), "vinyl.reader.%d", i);
-		if (cord_costart(&reader->cord, name,
-				 vy_run_reader_f, reader) != 0)
-			panic("failed to start vinyl reader thread");
+		struct fiber *fiber = fiber_new(name, vy_run_reader_f);
+		fiber_set_joinable(fiber, true);
+		fiber_start(fiber, reader);
 		cpipe_create(&reader->reader_pipe, name);
 	}
 	env->next_reader = 0;
@@ -165,8 +165,7 @@ static void
 vy_run_env_stop_readers(struct vy_run_env *env)
 {
 	for (int i = 0; i < env->reader_pool_size; i++) {
-		struct vy_run_reader *reader = &env->reader_pool[i];
-		cord_cancel_and_join(&reader->cord);
+		/*XXX: should join the fiber but can't do that from sched. */
 	}
 	free(env->reader_pool);
 }
