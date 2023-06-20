@@ -3256,15 +3256,9 @@ iproto_init(int threads_count)
 		iproto_thread->id = i;
 		if (iproto_thread_init(iproto_thread) != 0)
 			goto fail;
-
-		if (cord_costart(&iproto_thread->net_cord, "iproto",
-				 net_cord_f, iproto_thread)) {
-			mh_i32_delete(iproto_thread->req_handlers);
-			rmean_delete(iproto_thread->rmean);
-			rmean_delete(iproto_thread->tx.rmean);
-			slab_cache_destroy(&iproto_thread->net_slabc);
-			goto fail;
-		}
+		struct fiber *fiber = fiber_new("iproto", net_cord_f);
+		fiber_set_joinable(fiber, true);
+		fiber_start(fiber, iproto_thread);
 		/* Create a pipe to "net" thread. */
 		char endpoint_name[ENDPOINT_NAME_MAX];
 		snprintf(endpoint_name, ENDPOINT_NAME_MAX, "net%u",
@@ -3649,7 +3643,7 @@ void
 iproto_free(void)
 {
 	for (int i = 0; i < iproto_threads_count; i++) {
-		cord_cancel_and_join(&iproto_threads[i].net_cord);
+		/* XXX: should join the fiber, but can't do this from sched. */
 		mh_i32_delete(iproto_threads[i].req_handlers);
 		/*
 		 * Close socket descriptor to prevent hot standby instance
