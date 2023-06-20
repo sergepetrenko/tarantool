@@ -335,8 +335,9 @@ vy_worker_pool_start(struct vy_worker_pool *pool)
 		char name[FIBER_NAME_MAX];
 		snprintf(name, sizeof(name), "vinyl.%s.%d", pool->name, i);
 		struct vy_worker *worker = &pool->workers[i];
-		if (cord_costart(&worker->cord, name, vy_worker_f, worker) != 0)
-			panic("failed to start vinyl worker thread");
+		struct fiber *fiber = fiber_new(name, vy_worker_f);
+		fiber_set_joinable(fiber, true);
+		fiber_start(fiber, worker);
 
 		worker->pool = pool;
 		cpipe_create(&worker->worker_pipe, name);
@@ -355,8 +356,7 @@ vy_worker_pool_stop(struct vy_worker_pool *pool)
 {
 	assert(pool->workers != NULL);
 	for (int i = 0; i < pool->size; i++) {
-		struct vy_worker *worker = &pool->workers[i];
-		cord_cancel_and_join(&worker->cord);
+		/* XXX: should join the fiber but can't do that from sched. */
 	}
 	free(pool->workers);
 	pool->workers = NULL;
@@ -1743,7 +1743,6 @@ vy_task_f(va_list va)
 
 	assert(task->fiber == fiber());
 	assert(worker->task == task);
-	assert(&worker->cord == cord());
 
 	if (task->ops->execute(task) != 0 && !task->is_failed) {
 		struct diag *diag = diag_get();
@@ -1771,7 +1770,6 @@ vy_task_execute_f(struct cmsg *cmsg)
 
 	assert(task->fiber == NULL);
 	assert(worker->task == NULL);
-	assert(&worker->cord == cord());
 
 	task->fiber = fiber_new("task", vy_task_f);
 	if (task->fiber == NULL) {
@@ -2084,7 +2082,7 @@ vy_worker_f(va_list ap)
 	struct cbus_endpoint endpoint;
 
 	cpipe_create(&worker->tx_pipe, "tx");
-	cbus_endpoint_create(&endpoint, cord_name(&worker->cord),
+	cbus_endpoint_create(&endpoint, fiber_name(fiber()),
 			     fiber_schedule_cb, fiber());
 	cbus_loop(&endpoint);
 	/*
