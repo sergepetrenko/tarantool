@@ -402,6 +402,7 @@ fiber_call_impl(struct fiber *callee)
 {
 	struct fiber *caller = fiber();
 	struct cord *cord = cord();
+	say_verbose("Switch fiber: %s -> %s", caller->name, callee->name);
 
 	/* Ensure we aren't switching to a fiber parked in fiber_loop */
 	assert(callee->f != NULL && callee->fid != 0);
@@ -451,6 +452,8 @@ fiber_call(struct fiber *callee)
 	callee->caller = caller;
 	callee->flags |= FIBER_IS_READY;
 	caller->flags |= FIBER_IS_READY;
+	say_verbose("Call %s (%llu) -> %s (%llu)", caller->name, caller->fid,
+		    callee->name, callee->fid);
 	fiber_call_impl(callee);
 }
 
@@ -533,6 +536,8 @@ fiber_wakeup(struct fiber *f)
 	 */
 	assert((f->flags & FIBER_IS_DEAD) == 0 ||
 	       (f->flags & FIBER_IS_JOINABLE) != 0);
+	say_verbose("Wake up: %s (%llu) wakes up %s (%llu)", fiber()->name, fiber()->fid,
+		    f->name, f->fid);
 	const int no_flags = FIBER_IS_READY | FIBER_IS_DEAD | FIBER_IS_RUNNING;
 	if ((f->flags & no_flags) == 0)
 		fiber_make_ready(f);
@@ -688,6 +693,9 @@ fiber_yield(void)
 	struct fiber *callee = caller->caller;
 	caller->caller = &cord->sched;
 
+	say_verbose("Yield: %s (%llu) -> %s (%llu)", caller->name, caller->fid,
+		    callee->name, callee->fid);
+
 	/** By convention, these triggers must not throw. */
 	if (! rlist_empty(&caller->on_yield))
 		trigger_run(&caller->on_yield, NULL);
@@ -732,6 +740,7 @@ fiber_schedule_timeout(ev_loop *loop,
 	struct fiber_watcher_data *state =
 			(struct fiber_watcher_data *) watcher->data;
 	state->timed_out = true;
+	say_verbose("Timeout: wake up %s (%llu)", state->f->name, state->f->fid);
 	fiber_wakeup(state->f);
 }
 
@@ -789,6 +798,7 @@ fiber_schedule_cb(ev_loop *loop, ev_watcher *watcher, int revents)
 	(void) revents;
 	struct fiber *fiber = watcher->data;
 	assert(fiber() == &cord()->sched);
+	say_verbose("Schedule cb: wake up %s", fiber->name);
 	fiber_wakeup(fiber);
 }
 
@@ -808,9 +818,12 @@ fiber_schedule_list(struct rlist *list)
 	first = last = rlist_shift_entry(list, struct fiber, state);
 	assert(last->flags & FIBER_IS_READY);
 
+	say_verbose("Schedule %s (%llu)", first->name, first->fid);
+
 	while (! rlist_empty(list)) {
 		last->caller = rlist_shift_entry(list, struct fiber, state);
 		last = last->caller;
+		say_verbose("Schedule %s (%llu)", last->name, last->fid);
 		assert(last->flags & FIBER_IS_READY);
 	}
 	last->caller = fiber();
@@ -827,6 +840,7 @@ fiber_schedule_wakeup(ev_loop *loop, ev_async *watcher, int revents)
 	(void) revents;
 	struct cord *cord = cord();
 	fiber_check_gc();
+	say_verbose("Sched: scheduling wakeup");
 	fiber_schedule_list(&cord->ready);
 }
 
@@ -1061,6 +1075,7 @@ fiber_set_name(struct fiber *fiber, const char *name)
 		fiber->name = new_name;
 	}
 	--size;
+	say_verbose("Rename %s(%llu) -> %s(%llu)", fiber->name, fiber->fid, name, fiber->fid);
 	memcpy(fiber->name, name, size);
 	fiber->name[size] = 0;
 }
@@ -1469,6 +1484,8 @@ loop_on_iteration_start(ev_loop *loop, ev_check *watcher, int revents)
 	(void) revents;
 
 	cpu_stat_start(&cord()->cpu_stat);
+	/* XXX: spams 100 times a second. */
+	say_debug("loop iteration start: SYSTEM -> sched");
 }
 
 static void
@@ -1496,13 +1513,17 @@ loop_on_iteration_end(ev_loop *loop, ev_prepare *watcher, int revents)
 	rlist_foreach_entry(fiber, &cord()->alive, link) {
 		clock_stat_update(&fiber->clock_stat, nsec_per_clock);
 	}
+	/* XXX: spans 100 times a second. */
+	say_debug("loop iteration end: sched -> SYSTEM");
 }
 
 static inline void
 fiber_top_init(void)
 {
 	ev_prepare_init(&cord()->prepare_event, loop_on_iteration_end);
+	ev_prepare_start(cord()->loop, &cord()->prepare_event);
 	ev_check_init(&cord()->check_event, loop_on_iteration_start);
+	ev_check_start(cord()->loop, &cord()->check_event);
 }
 
 bool
