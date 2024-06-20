@@ -268,6 +268,7 @@ set(box_sources
     xstream.cc
     applier.cc
     relay.cc
+    relay_stream.c
     journal.c
     sql.c
     bind.c
