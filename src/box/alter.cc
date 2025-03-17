@@ -1199,6 +1199,10 @@ CheckSpaceFormat::prepare(struct alter_space *alter)
 	struct space *old_space = alter->old_space;
 	struct tuple_format *new_format = new_space->format;
 	struct tuple_format *old_format = old_space->format;
+	struct field_def *new_fields = new_space->def->fields;
+	uint32_t new_field_count = new_space->def->field_count;
+	struct field_def *old_fields = old_space->def->fields;
+	uint32_t old_field_count = old_space->def->field_count;
 
 	if (old_format == NULL)
 		return;
@@ -1210,6 +1214,21 @@ CheckSpaceFormat::prepare(struct alter_space *alter)
 		if (!tuple_format_is_compatible_with_key_def(new_format,
 							     key_def))
 			diag_raise();
+		const struct key_part *part = key_def->parts;
+		const struct key_part *end = part + key_def->part_count;
+		for (; part != end; part++) {
+			uint32_t fieldno = part->fieldno;
+			const char *old_name = fieldno < old_field_count ?
+				old_fields[fieldno].name : NULL;
+			const char *new_name = fieldno < new_field_count ?
+				new_fields[fieldno].name : NULL;
+			if (old_name != NULL &&
+			    (new_name == NULL ||
+			     strcmp(old_name, new_name) != 0)) {
+				tnt_raise(ClientError, ER_UNSUPPORTED,
+					  "Indexed field", "renaming");
+			}
+		}
 	}
 
 	if (new_space->upgrade != NULL) {
