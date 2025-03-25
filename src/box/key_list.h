@@ -71,6 +71,16 @@ struct key_list_iterator {
 };
 
 /**
+ * Execute a function specified in the given functional index definition.
+ *
+ * @retval 0 success.
+ * @retval -1 on function error, validation error, memory error.
+ */
+int
+func_index_func_call(struct index_def *index_def, struct tuple *tuple,
+		     const char **data, const char **data_end);
+
+/**
  * Initialize a new key list iterator.
  *
  * Executes a function specified in the given functional index

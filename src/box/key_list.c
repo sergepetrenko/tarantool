@@ -43,15 +43,9 @@
 #include "tuple.h"
 
 int
-key_list_iterator_create(struct key_list_iterator *it, struct tuple *tuple,
-			 struct index_def *index_def, bool validate,
-			 struct tuple_format *format)
+func_index_func_call(struct index_def *index_def, struct tuple *tuple,
+		     const char **data, const char **data_end)
 {
-	it->index_def = index_def;
-	it->validate = validate;
-	it->tuple = tuple;
-	it->format = format;
-
 	struct region *region = &fiber()->gc;
 	size_t region_svp = region_used(region);
 	struct func *func = index_def->key_def->func_index_func;
@@ -67,10 +61,10 @@ key_list_iterator_create(struct key_list_iterator *it, struct tuple *tuple,
 			 index_def->space_name, "can't evaluate function");
 		return -1;
 	}
-	uint32_t key_data_sz;
-	const char *key_data = port_get_msgpack(&out_port, &key_data_sz);
+	uint32_t data_sz;
+	*data = port_get_msgpack(&out_port, &data_sz);
 	port_destroy(&out_port);
-	if (key_data == NULL) {
+	if (*data == NULL) {
 		/* Can't get a result returned by function . */
 		diag_add(ClientError, ER_FUNC_INDEX_FUNC,
 			 index_def->name, index_def->space_name,
@@ -78,9 +72,9 @@ key_list_iterator_create(struct key_list_iterator *it, struct tuple *tuple,
 		return -1;
 	}
 
-	it->data_end = key_data + key_data_sz;
-	assert(mp_typeof(*key_data) == MP_ARRAY);
-	if (mp_decode_array(&key_data) != 1) {
+	*data_end = *data + data_sz;
+	assert(mp_typeof(**data) == MP_ARRAY);
+	if (mp_decode_array(data) != 1) {
 		/*
 		 * Function return doesn't follow the
 		 * convention: to many values were returned.
@@ -93,7 +87,7 @@ key_list_iterator_create(struct key_list_iterator *it, struct tuple *tuple,
 		return -1;
 	}
 	if (func->def->opts.is_multikey) {
-		if (mp_typeof(*key_data) != MP_ARRAY) {
+		if (mp_typeof(**data) != MP_ARRAY) {
 			/*
 			 * Multikey function must return an array
 			 * of keys.
@@ -104,10 +98,22 @@ key_list_iterator_create(struct key_list_iterator *it, struct tuple *tuple,
 				 "a multikey function mustn't return a scalar");
 			return -1;
 		}
-		(void)mp_decode_array(&key_data);
+		(void)mp_decode_array(data);
 	}
-	it->data = key_data;
 	return 0;
+}
+
+int
+key_list_iterator_create(struct key_list_iterator *it, struct tuple *tuple,
+			 struct index_def *index_def, bool validate,
+			 struct tuple_format *format)
+{
+	it->index_def = index_def;
+	it->validate = validate;
+	it->tuple = tuple;
+	it->format = format;
+
+	return func_index_func_call(index_def, tuple, &it->data, &it->data_end);
 }
 
 int
