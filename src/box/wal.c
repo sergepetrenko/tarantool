@@ -648,6 +648,9 @@ wal_enable(void)
 	if (xdir_scan(&writer->wal_dir, true))
 		return -1;
 
+	/* Remove leftover .xlog.inprogress files. */
+	xdir_remove_temporary_files(&writer->wal_dir);
+
 	/* Open the most recent WAL file. */
 	if (wal_open(writer) != 0)
 		return -1;
