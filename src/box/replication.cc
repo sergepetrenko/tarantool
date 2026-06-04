@@ -1071,11 +1071,14 @@ next:
 			continue;
 		struct replica *other = replica_hash_search(&uniq, replica);
 		if (keep_connect && other != NULL &&
+		    uri_is_equal(&replica->applier->uri, &other->applier->uri) &&
 		    (replica->applier->state == APPLIER_FOLLOW ||
 		     replica->applier->state == APPLIER_SYNC)) {
 			/*
 			 * Try not to interrupt working appliers upon
-			 * reconfiguration.
+			 * reconfiguration. But switch to a connection with
+			 * new URI parameters as soon as the user provides
+			 * them via configuration.
 			 */
 			replicaset.applier.connected++;
 			replicaset.applier.synced++;
