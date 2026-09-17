@@ -107,10 +107,7 @@ struct gc_consumer {
 	struct vclock vclock;
 	/** Type of object consumer belongs to. */
 	enum gc_consumer_type type;
-	/**
-	 * This flag is set if a WAL needed by this consumer was
-	 * deleted by the WAL thread on ENOSPC.
-	 */
+	/** This flag is set if a WAL needed by this consumer is unavailable. */
 	bool is_inactive;
 	/** Whether consumer is stored in persistent state. */
 	bool is_persistent;
@@ -403,6 +400,10 @@ gc_consumer_register(const struct vclock *vclock, enum gc_consumer_type type,
  */
 void
 gc_consumer_unregister(struct gc_consumer *consumer);
+
+/** Stop retaining WALs for a consumer whose required WALs are missing. */
+void
+gc_consumer_deactivate(struct gc_consumer *consumer);
 
 /**
  * Advance the vclock tracked by a consumer and

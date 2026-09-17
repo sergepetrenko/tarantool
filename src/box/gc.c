@@ -441,14 +441,7 @@ gc_advance(const struct vclock *vclock)
 			consumer = next;
 			continue;
 		}
-		assert(!consumer->is_inactive);
-		consumer->is_inactive = true;
-		gc_tree_remove(&gc.active_consumers, consumer);
-
-		say_crit("deactivated WAL consumer %s at %s",
-			 gc_consumer_name(consumer),
-			 vclock_to_string(&consumer->vclock));
-
+		gc_consumer_deactivate(consumer);
 		consumer = next;
 	}
 	gc_schedule_cleanup();
@@ -709,12 +702,12 @@ gc_consumer_register(const struct vclock *vclock, enum gc_consumer_type type,
 	if (consumer != NULL) {
 		assert(consumer->is_orphan);
 		consumer->is_orphan = false;
-		if (!consumer->is_inactive) {
+		if (!consumer->is_inactive)
 			gc_tree_remove(&gc.active_consumers, consumer);
-			vclock_copy(&consumer->vclock, vclock);
-			gc_tree_insert(&gc.active_consumers, consumer);
-			gc_schedule_cleanup();
-		}
+		vclock_copy(&consumer->vclock, vclock);
+		consumer->is_inactive = false;
+		gc_tree_insert(&gc.active_consumers, consumer);
+		gc_schedule_cleanup();
 		return consumer;
 	}
 	consumer = gc_consumer_register_impl(vclock, type, uuid);
@@ -741,6 +734,19 @@ gc_consumer_unregister(struct gc_consumer *consumer)
 	consumer->is_orphan = true;
 	if (!consumer->is_persistent)
 		gc_consumer_unregister_impl(consumer);
+}
+
+void
+gc_consumer_deactivate(struct gc_consumer *consumer)
+{
+	if (consumer->is_inactive)
+		return;
+	consumer->is_inactive = true;
+	gc_tree_remove(&gc.active_consumers, consumer);
+	say_crit("deactivated WAL consumer %s at %s",
+		 gc_consumer_name(consumer),
+		 vclock_to_string(&consumer->vclock));
+	gc_schedule_cleanup();
 }
 
 void

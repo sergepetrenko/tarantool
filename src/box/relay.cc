@@ -1198,8 +1198,12 @@ relay_subscribe(struct replica *replica, struct iostream *io, uint64_t sync,
 	int rc = cord_costart(&cord, "subscribe", relay_subscribe_f, relay);
 	if (rc == 0)
 		rc = cord_cojoin(&cord);
-	if (rc != 0)
+	if (rc != 0) {
+		struct error *e = diag_last_error(diag_get());
+		if (type_cast(XlogGapError, e) != NULL)
+			gc_consumer_deactivate(replica->gc);
 		diag_raise();
+	}
 }
 
 static void
