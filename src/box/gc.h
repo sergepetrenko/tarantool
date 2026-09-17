@@ -107,10 +107,7 @@ struct gc_consumer {
 	struct vclock vclock;
 	/** Type of object consumer belongs to. */
 	enum gc_consumer_type type;
-	/**
-	 * This flag is set if a WAL needed by this consumer was
-	 * deleted by the WAL thread on ENOSPC.
-	 */
+	/** This flag is set if a WAL needed by this consumer is unavailable. */
 	bool is_inactive;
 	/** Whether consumer is stored in persistent state. */
 	bool is_persistent;
@@ -132,8 +129,10 @@ typedef void
 
 /** Garbage collection state. */
 struct gc_state {
-	/** VClock of the oldest WAL row available on the instance. */
+	/** Logical WAL cleanup position. */
 	struct vclock vclock;
+	/** Starting vclock of the oldest retained WAL file. */
+	struct vclock wal_vclock;
 	/** A callback invoked whenever gc.vclock is updated. */
 	on_garbage_collection_f on_garbage_collection;
 	/**

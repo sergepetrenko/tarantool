@@ -132,6 +132,7 @@ gc_init(on_garbage_collection_f on_garbage_collection)
 	say_info("wal/engine cleanup is paused");
 
 	vclock_create(&gc.vclock);
+	vclock_create(&gc.wal_vclock);
 	rlist_create(&gc.checkpoints);
 	rlist_create(&gc.consumers);
 	gc_tree_new(&gc.active_consumers);
@@ -189,6 +190,43 @@ gc_free(void)
 	rlist_foreach_entry_safe(consumer, &gc.consumers, in_consumers,
 				 next_consumer) {
 		gc_consumer_delete(consumer);
+	}
+}
+
+/**
+ * Consumers may register while WAL cleanup is in progress, before the new
+ * retained-file boundary is known to the TX thread.
+ */
+static void
+gc_advance_wal_vclock(const struct vclock *vclock)
+{
+	/* An emergency GC notification may overtake a normal cleanup response. */
+	if (vclock_sum(vclock) <= vclock_sum(&gc.wal_vclock))
+		return;
+	vclock_copy(&gc.wal_vclock, vclock);
+
+	struct gc_consumer *consumer = gc_tree_first(&gc.active_consumers);
+	while (consumer != NULL) {
+		struct gc_consumer *next = gc_tree_next(&gc.active_consumers,
+							consumer);
+		/*
+		 * Remove all the consumers whose vclocks are
+		 * either less than or incomparable with the wal
+		 * gc vclock.
+		 */
+		if (vclock_compare_ignore0(vclock, &consumer->vclock) <= 0) {
+			consumer = next;
+			continue;
+		}
+		assert(!consumer->is_inactive);
+		consumer->is_inactive = true;
+		gc_tree_remove(&gc.active_consumers, consumer);
+
+		say_crit("deactivated WAL consumer %s at %s",
+			 gc_consumer_name(consumer),
+			 vclock_to_string(&consumer->vclock));
+
+		consumer = next;
 	}
 }
 
@@ -279,8 +317,11 @@ gc_run_cleanup(void)
 	 */
 	if (run_engine_gc)
 		engine_collect_garbage(&checkpoint->vclock);
-	if (run_wal_gc)
-		wal_collect_garbage(&min_vclock);
+	if (run_wal_gc) {
+		struct vclock wal_vclock;
+		wal_collect_garbage(&min_vclock, &wal_vclock);
+		gc_advance_wal_vclock(&wal_vclock);
+	}
 	gc.on_garbage_collection();
 }
 
@@ -427,30 +468,7 @@ gc_advance(const struct vclock *vclock)
 	 * Bring the garbage collector vclock up to date.
 	 */
 	vclock_copy(&gc.vclock, vclock);
-
-	struct gc_consumer *consumer = gc_tree_first(&gc.active_consumers);
-	while (consumer != NULL) {
-		struct gc_consumer *next = gc_tree_next(&gc.active_consumers,
-							consumer);
-		/*
-		 * Remove all the consumers whose vclocks are
-		 * either less than or incomparable with the wal
-		 * gc vclock.
-		 */
-		if (vclock_compare_ignore0(vclock, &consumer->vclock) <= 0) {
-			consumer = next;
-			continue;
-		}
-		assert(!consumer->is_inactive);
-		consumer->is_inactive = true;
-		gc_tree_remove(&gc.active_consumers, consumer);
-
-		say_crit("deactivated WAL consumer %s at %s",
-			 gc_consumer_name(consumer),
-			 vclock_to_string(&consumer->vclock));
-
-		consumer = next;
-	}
+	gc_advance_wal_vclock(vclock);
 	gc_schedule_cleanup();
 	gc.on_garbage_collection();
 }
@@ -695,7 +713,10 @@ gc_consumer_register_impl(const struct vclock *vclock,
 	consumer->uuid = *uuid;
 
 	vclock_copy(&consumer->vclock, vclock);
-	gc_tree_insert(&gc.active_consumers, consumer);
+	consumer->is_inactive =
+		vclock_compare_ignore0(&gc.wal_vclock, vclock) > 0;
+	if (!consumer->is_inactive)
+		gc_tree_insert(&gc.active_consumers, consumer);
 	rlist_add_entry(&gc.consumers, consumer, in_consumers);
 	consumer->is_orphan = true;
 	return consumer;
@@ -709,12 +730,14 @@ gc_consumer_register(const struct vclock *vclock, enum gc_consumer_type type,
 	if (consumer != NULL) {
 		assert(consumer->is_orphan);
 		consumer->is_orphan = false;
-		if (!consumer->is_inactive) {
+		if (!consumer->is_inactive)
 			gc_tree_remove(&gc.active_consumers, consumer);
-			vclock_copy(&consumer->vclock, vclock);
+		vclock_copy(&consumer->vclock, vclock);
+		consumer->is_inactive =
+			vclock_compare_ignore0(&gc.wal_vclock, vclock) > 0;
+		if (!consumer->is_inactive)
 			gc_tree_insert(&gc.active_consumers, consumer);
-			gc_schedule_cleanup();
-		}
+		gc_schedule_cleanup();
 		return consumer;
 	}
 	consumer = gc_consumer_register_impl(vclock, type, uuid);

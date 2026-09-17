@@ -238,10 +238,11 @@ wal_get_retention_vclock(struct vclock *vclock);
 
 /**
  * Remove WAL files that are not needed by consumers reading
- * rows at @vclock or newer.
+ * rows at @vclock or newer. Return the oldest retained WAL file vclock
+ * in @out, or the current WAL vclock if no files remain.
  */
 void
-wal_collect_garbage(const struct vclock *vclock);
+wal_collect_garbage(const struct vclock *vclock, struct vclock *out);
 
 /**
  * Backup up WAL. Calls @cb on every xlog from @begin_vclock to @end_vclock.

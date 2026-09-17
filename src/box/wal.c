@@ -955,13 +955,16 @@ struct wal_gc_msg
 {
 	struct cbus_call_msg base;
 	const struct vclock *vclock;
+	/** Starting vclock of the oldest retained WAL file. */
+	struct vclock wal_vclock;
 };
 
 static int
 wal_collect_garbage_f(struct cbus_call_msg *data)
 {
 	struct wal_writer *writer = &wal_writer_singleton;
-	const struct vclock *vclock = ((struct wal_gc_msg *)data)->vclock;
+	struct wal_gc_msg *msg = (struct wal_gc_msg *)data;
+	const struct vclock *vclock = msg->vclock;
 
 	if (!xlog_is_open(&writer->current_wal) &&
 	    vclock_sum(vclock) >= vclock_sum(&writer->vclock)) {
@@ -982,19 +985,24 @@ wal_collect_garbage_f(struct cbus_call_msg *data)
 		xdir_collect_garbage(&writer->wal_dir, vclock_sum(vclock),
 				     XDIR_GC_ASYNC);
 
+	if (xdir_first_vclock(&writer->wal_dir, &msg->wal_vclock) < 0)
+		vclock_copy(&msg->wal_vclock, &writer->vclock);
 	return 0;
 }
 
 void
-wal_collect_garbage(const struct vclock *vclock)
+wal_collect_garbage(const struct vclock *vclock, struct vclock *out)
 {
 	struct wal_writer *writer = &wal_writer_singleton;
-	if (writer->wal_mode == WAL_NONE)
+	if (writer->wal_mode == WAL_NONE) {
+		vclock_create(out);
 		return;
+	}
 	struct wal_gc_msg msg;
 	msg.vclock = vclock;
 	cbus_call(&writer->wal_pipe, &writer->tx_prio_pipe, &msg.base,
 		  wal_collect_garbage_f);
+	vclock_copy(out, &msg.wal_vclock);
 }
 
 /** Message to exchange data between TX and WAL threads on backup. */
